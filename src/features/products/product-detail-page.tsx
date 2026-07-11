@@ -28,7 +28,12 @@ import {
   getProduct,
   reenableChecks,
 } from "@/lib/api/products";
-import { formatDateTime, formatPrice, stockLabel } from "@/lib/format";
+import {
+  formatDateTime,
+  formatPrice,
+  formatVariant,
+  stockLabel,
+} from "@/lib/format";
 import type { PriceHistoryPoint, Product } from "@/lib/types";
 
 function ProductContent() {
@@ -116,7 +121,11 @@ function ProductContent() {
     <>
       <PageHeader
         title={product.name || "Product"}
-        description="Live product snapshot and recorded price samples."
+        description={
+          formatVariant(product)
+            ? `${formatVariant(product)} · live snapshot and price samples`
+            : "Live product snapshot and recorded price samples."
+        }
         actions={
           <Link href="/items">
             <Button variant="secondary" size="sm">
@@ -149,6 +158,9 @@ function ProductContent() {
                 <Badge tone={product.healthy ? "success" : "danger"}>
                   {product.healthy ? "Healthy" : "Unhealthy"}
                 </Badge>
+                {formatVariant(product) && (
+                  <Badge tone="neutral">{formatVariant(product)}</Badge>
+                )}
               </div>
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
@@ -159,6 +171,12 @@ function ProductContent() {
                 </p>
               </div>
               <dl className="space-y-1.5">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-[var(--muted)]">Variant</dt>
+                  <dd className="font-medium text-right">
+                    {formatVariant(product) || "—"}
+                  </dd>
+                </div>
                 <div className="flex justify-between gap-3">
                   <dt className="text-[var(--muted)]">Stock</dt>
                   <dd className="font-medium text-right">

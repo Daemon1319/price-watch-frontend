@@ -35,6 +35,28 @@ export function stockLabel(status: string | null | undefined): string {
   }
 }
 
+/** Human-readable color / size line, e.g. "Black / M". */
+export function formatVariant(parts: {
+  colorName?: string | null;
+  colorCode?: string | null;
+  sizeName?: string | null;
+  sizeCode?: string | null;
+}): string | null {
+  const color = parts.colorName?.trim() || parts.colorCode?.trim() || null;
+  const size = parts.sizeName?.trim() || parts.sizeCode?.trim() || null;
+  if (!color && !size) return null;
+  if (color && size) return `${color} / ${size}`;
+  return color ?? size;
+}
+
+export function colorOptionLabel(code: string, name: string | null | undefined): string {
+  return name?.trim() ? `${name} (${code})` : code;
+}
+
+export function sizeOptionLabel(code: string, name: string | null | undefined): string {
+  return name?.trim() ? `${name} (${code})` : code;
+}
+
 export function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
