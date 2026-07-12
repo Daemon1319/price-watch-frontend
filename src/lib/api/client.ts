@@ -1,8 +1,9 @@
 import {
+  applyAuthSession,
   clearAccessToken,
   clearLegacyTokenStorage,
   getAccessToken,
-  setAccessToken,
+  getRefreshToken,
 } from "@/lib/auth/session";
 import type { LoginResponse, ProblemDetail } from "@/lib/types";
 
@@ -40,27 +41,35 @@ type RequestOptions = {
 let refreshPromise: Promise<boolean> | null = null;
 
 /**
- * Rotate the HttpOnly refresh cookie → new access JWT in memory.
- * Uses credentials so the browser sends the cookie to the API origin.
+ * New access JWT via refresh cookie and/or body refresh token.
+ * Body token is required when SPA and API are cross-site (cookie not sent).
  */
 export async function tryRefresh(): Promise<boolean> {
   if (refreshPromise) return refreshPromise;
 
   refreshPromise = (async () => {
     try {
+      const storedRefresh = getRefreshToken();
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+      };
+      if (storedRefresh) {
+        headers["Content-Type"] = "application/json";
+      }
       const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
         method: "POST",
-        headers: {
-          Accept: "application/json",
-        },
+        headers,
         credentials: "include",
+        body: storedRefresh
+          ? JSON.stringify({ refreshToken: storedRefresh })
+          : undefined,
       });
       if (!res.ok) {
         clearAccessToken();
         return false;
       }
       const data = (await res.json()) as LoginResponse;
-      setAccessToken(data.accessToken, data.expiresIn);
+      applyAuthSession(data.accessToken, data.expiresIn, data.refreshToken);
       return true;
     } catch {
       clearAccessToken();
@@ -100,9 +109,9 @@ async function parseError(res: Response): Promise<ApiError> {
 
 /**
  * Browser-side API helper.
- * - Access JWT: Authorization Bearer (memory)
- * - Refresh: HttpOnly cookie via credentials: "include"
- * - On 401: one cookie-based refresh, then retry once
+ * - Access JWT: Authorization Bearer (memory / localStorage)
+ * - Refresh: cookie (same-site) and/or body token (cross-site)
+ * - On 401: one refresh attempt, then retry once
  */
 export async function apiFetch<T>(
   path: string,
