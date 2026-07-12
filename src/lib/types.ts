@@ -4,10 +4,12 @@ export type StockStatus = "IN_STOCK" | "OUT_OF_STOCK" | "UNKNOWN";
 
 export type TrackedItemStatus = "ACTIVE" | "PAUSED";
 
-/** Access JWT only — refresh is HttpOnly cookie, not in JSON. */
+/** Access JWT + opaque refresh (also set as HttpOnly cookie when same-site). */
 export interface LoginResponse {
   accessToken: string;
   expiresIn: number;
+  /** Present so cross-origin SPAs can refresh when cookies are not sent. */
+  refreshToken?: string | null;
 }
 
 export interface ProblemDetail {

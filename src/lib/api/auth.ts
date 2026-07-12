@@ -1,11 +1,16 @@
 import {
+  applyAuthSession,
   clearAccessToken,
   clearLegacyTokenStorage,
-  isAuthenticated,
-  setAccessToken,
+  getAccessToken,
+  getRefreshToken,
 } from "@/lib/auth/session";
 import { apiFetch, tryRefresh } from "@/lib/api/client";
 import type { LoginResponse } from "@/lib/types";
+
+function saveSession(data: LoginResponse): void {
+  applyAuthSession(data.accessToken, data.expiresIn, data.refreshToken);
+}
 
 export async function register(email: string, password: string): Promise<void> {
   clearLegacyTokenStorage();
@@ -14,7 +19,7 @@ export async function register(email: string, password: string): Promise<void> {
     body: { email, password },
     auth: false,
   });
-  setAccessToken(data.accessToken, data.expiresIn);
+  saveSession(data);
 }
 
 export async function login(email: string, password: string): Promise<void> {
@@ -24,28 +29,28 @@ export async function login(email: string, password: string): Promise<void> {
     body: { email, password },
     auth: false,
   });
-  setAccessToken(data.accessToken, data.expiresIn);
+  saveSession(data);
 }
 
 /**
- * Silent rehydrate after page reload:
- * 1) access JWT from sessionStorage (survives refresh; needed when Vercel→local API
- *    cannot send the cross-site refresh cookie)
- * 2) else refresh cookie → new access JWT
+ * After page load / reopen:
+ * 1) valid access JWT in localStorage
+ * 2) else body/cookie refresh → new access JWT
  */
 export async function restoreSession(): Promise<boolean> {
   clearLegacyTokenStorage();
-  if (isAuthenticated()) {
+  if (getAccessToken()) {
     return true;
   }
   return tryRefresh();
 }
 
 export async function logout(): Promise<void> {
+  const refreshToken = getRefreshToken();
   try {
-    // Cookie is sent via credentials; access JWT via Authorization if present.
     await apiFetch<void>("/api/v1/auth/logout", {
       method: "POST",
+      body: refreshToken ? { refreshToken } : undefined,
     });
   } catch {
     // Always clear local session even if server revoke fails
