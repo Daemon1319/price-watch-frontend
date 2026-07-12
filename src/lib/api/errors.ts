@@ -1,4 +1,4 @@
-import { ApiError, LocalNetworkAccessError } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/client";
 
 /** Normalized copy for UI alerts. */
 export type UserFacingError = {
@@ -15,16 +15,9 @@ export function isApiError(error: unknown): error is ApiError {
 
 /**
  * Maps API / network failures to short, user-safe title + detail.
- * Handles 429 (rate limit), tracking-limit 403, LNA, and field validation.
+ * Handles 429 (rate limit), tracking-limit 403, and field validation.
  */
 export function getUserFacingError(error: unknown): UserFacingError {
-  if (error instanceof LocalNetworkAccessError) {
-    return {
-      title: "Local network access blocked",
-      detail: error.message,
-    };
-  }
-
   if (error instanceof ApiError) {
     if (error.status === 429) {
       const sec =
