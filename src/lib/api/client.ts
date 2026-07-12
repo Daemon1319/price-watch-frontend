@@ -66,8 +66,31 @@ export async function tryRefresh(): Promise<boolean> {
       });
 
       if (!res.ok) {
-        // Only wipe session on definitive auth failure, not transient 5xx
-        if (res.status === 401 || res.status === 403 || res.status === 400) {
+        // 401 on refresh usually means revoked/expired token. Do not clear on
+        // every 401 if another tab may have just rotated — re-read storage once.
+        if (res.status === 401 || res.status === 403) {
+          const latest = getRefreshToken();
+          if (latest && latest !== storedRefresh) {
+            // Another tab rotated; retry once with the newer token.
+            const retry = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+              method: "POST",
+              headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+              credentials: "include",
+              body: JSON.stringify({ refreshToken: latest }),
+            });
+            if (retry.ok) {
+              const data = (await retry.json()) as LoginResponse;
+              applyAuthSession(
+                data.accessToken,
+                data.expiresIn,
+                data.refreshToken ?? latest,
+              );
+              return true;
+            }
+          }
           clearAccessToken();
         }
         return false;
