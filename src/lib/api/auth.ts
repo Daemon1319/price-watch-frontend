@@ -35,12 +35,15 @@ export async function login(email: string, password: string): Promise<void> {
 /**
  * After page load / reopen:
  * 1) valid access JWT in localStorage
- * 2) else body/cookie refresh → new access JWT
+ * 2) else body refresh token → new access JWT (required for Vercel → local API)
  */
 export async function restoreSession(): Promise<boolean> {
   clearLegacyTokenStorage();
   if (getAccessToken()) {
     return true;
+  }
+  if (!getRefreshToken()) {
+    return false;
   }
   return tryRefresh();
 }
