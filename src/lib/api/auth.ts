@@ -1,6 +1,7 @@
 import {
   clearAccessToken,
   clearLegacyTokenStorage,
+  isAuthenticated,
   setAccessToken,
 } from "@/lib/auth/session";
 import { apiFetch, tryRefresh } from "@/lib/api/client";
@@ -27,11 +28,16 @@ export async function login(email: string, password: string): Promise<void> {
 }
 
 /**
- * Silent rehydrate after page reload: refresh cookie → access JWT in memory.
- * Returns whether a session was restored.
+ * Silent rehydrate after page reload:
+ * 1) access JWT from sessionStorage (survives refresh; needed when Vercel→local API
+ *    cannot send the cross-site refresh cookie)
+ * 2) else refresh cookie → new access JWT
  */
 export async function restoreSession(): Promise<boolean> {
   clearLegacyTokenStorage();
+  if (isAuthenticated()) {
+    return true;
+  }
   return tryRefresh();
 }
 
