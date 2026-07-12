@@ -8,8 +8,14 @@ import {
   useMemo,
   useState,
 } from "react";
-import { clearAccessToken, isAuthenticated } from "@/lib/auth/session";
+import {
+  clearAccessToken,
+  getAccessExpiresAt,
+  getRefreshToken,
+  isAuthenticated,
+} from "@/lib/auth/session";
 import * as authApi from "@/lib/api/auth";
+import { tryRefresh } from "@/lib/api/client";
 
 type AuthContextValue = {
   ready: boolean;
@@ -22,6 +28,9 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/** Refresh ~60s before access JWT expires so a page reload mid-session still has a valid token. */
+const REFRESH_SKEW_MS = 60_000;
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -30,19 +39,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthenticated(isAuthenticated());
   }, []);
 
-  // On boot: drop legacy localStorage tokens, try cookie refresh for access JWT.
+  // On boot: restore access from storage, or rotate via refresh token body.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const ok = await authApi.restoreSession();
         if (!cancelled) {
-          setAuthenticated(ok);
+          setAuthenticated(ok || isAuthenticated());
         }
       } catch {
         if (!cancelled) {
-          clearAccessToken();
-          setAuthenticated(false);
+          // Keep refresh token on unexpected errors; only clear on explicit logout / hard auth fail
+          setAuthenticated(isAuthenticated());
         }
       } finally {
         if (!cancelled) {
@@ -54,6 +63,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, []);
+
+  // Background: refresh access before it expires (avoids the "15 min then F5 = logged out" feel).
+  useEffect(() => {
+    if (!authenticated) return;
+
+    const tick = async () => {
+      if (!getRefreshToken()) return;
+      const exp = getAccessExpiresAt();
+      const msLeft = exp - Date.now();
+      if (exp > 0 && msLeft <= REFRESH_SKEW_MS) {
+        const ok = await tryRefresh();
+        if (ok) {
+          setAuthenticated(true);
+        } else {
+          // If refresh failed but we still have a token, stay; else mark logged out
+          setAuthenticated(isAuthenticated());
+        }
+      }
+    };
+
+    const id = window.setInterval(() => {
+      void tick();
+    }, 30_000);
+    void tick();
+    return () => window.clearInterval(id);
+  }, [authenticated]);
 
   const login = useCallback(
     async (email: string, password: string) => {

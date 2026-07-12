@@ -41,38 +41,51 @@ type RequestOptions = {
 let refreshPromise: Promise<boolean> | null = null;
 
 /**
- * New access JWT via refresh cookie and/or body refresh token.
- * Body token is required when SPA and API are cross-site (cookie not sent).
+ * New access JWT via body refresh token (and cookie when same-site).
+ * Dedupes concurrent callers so a rotated token is not reused (double-refresh race).
  */
 export async function tryRefresh(): Promise<boolean> {
   if (refreshPromise) return refreshPromise;
 
   refreshPromise = (async () => {
+    const storedRefresh = getRefreshToken();
+    // Cross-origin (Vercel → local API): cookie is not sent; body token is required.
+    if (!storedRefresh) {
+      return false;
+    }
+
     try {
-      const storedRefresh = getRefreshToken();
-      const headers: Record<string, string> = {
-        Accept: "application/json",
-      };
-      if (storedRefresh) {
-        headers["Content-Type"] = "application/json";
-      }
       const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
         method: "POST",
-        headers,
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
         credentials: "include",
-        body: storedRefresh
-          ? JSON.stringify({ refreshToken: storedRefresh })
-          : undefined,
+        body: JSON.stringify({ refreshToken: storedRefresh }),
       });
+
       if (!res.ok) {
-        clearAccessToken();
+        // Only wipe session on definitive auth failure, not transient 5xx
+        if (res.status === 401 || res.status === 403 || res.status === 400) {
+          clearAccessToken();
+        }
         return false;
       }
+
       const data = (await res.json()) as LoginResponse;
-      applyAuthSession(data.accessToken, data.expiresIn, data.refreshToken);
+      if (!data.accessToken) {
+        return false;
+      }
+      // Server rotates refresh — must store the new one
+      applyAuthSession(
+        data.accessToken,
+        data.expiresIn,
+        data.refreshToken ?? storedRefresh,
+      );
       return true;
     } catch {
-      clearAccessToken();
+      // Network blip (backend sleeping / offline): keep stored tokens for retry
       return false;
     } finally {
       refreshPromise = null;
@@ -109,8 +122,8 @@ async function parseError(res: Response): Promise<ApiError> {
 
 /**
  * Browser-side API helper.
- * - Access JWT: Authorization Bearer (memory / localStorage)
- * - Refresh: cookie (same-site) and/or body token (cross-site)
+ * - Access JWT: Authorization Bearer (localStorage)
+ * - Refresh: body token (cross-site) + cookie when available
  * - On 401: one refresh attempt, then retry once
  */
 export async function apiFetch<T>(
@@ -127,7 +140,12 @@ export async function apiFetch<T>(
   }
 
   if (auth) {
-    const token = getAccessToken();
+    // Proactively refresh if access is expired/missing but we still have refresh
+    let token = getAccessToken();
+    if (!token && getRefreshToken() && !skipRefresh) {
+      await tryRefresh();
+      token = getAccessToken();
+    }
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
