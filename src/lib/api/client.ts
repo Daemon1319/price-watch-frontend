@@ -30,6 +30,17 @@ export class ApiError extends Error {
   }
 }
 
+/** Thrown when the browser blocks a public-site → localhost/LAN fetch (Chrome LNA). */
+export class LocalNetworkAccessError extends Error {
+  constructor(message?: string) {
+    super(
+      message ??
+        "Chrome blocked access to your local API. Allow Local Network Access for this site (address bar / permission prompt), then reload.",
+    );
+    this.name = "LocalNetworkAccessError";
+  }
+}
+
 type RequestOptions = {
   method?: string;
   body?: unknown;
@@ -39,12 +50,17 @@ type RequestOptions = {
 };
 
 /**
- * Chrome Local Network Access: public pages (Vercel) calling the user's machine
- * must declare the correct IP address space.
+ * Chrome Local Network Access (LNA): a *public* page (e.g. Vercel) calling the
+ * user's machine needs (1) a secure context (HTTPS), (2) the correct
+ * `targetAddressSpace`, and (3) the user granting permission once.
+ *
+ * Address spaces (do not mix these up):
  * - localhost / 127.0.0.1 / ::1 → "loopback" (NOT "local")
- * - LAN hosts (192.168.x, 10.x, …) → "local"
- * Wrong tag →: target IP address space of `local` yet resource is in `loopback`
+ * - RFC1918 / .local → "local"
+ * Wrong tag fails with: target IP address space of `local` yet resource is in `loopback`
+ *
  * @see https://developer.chrome.com/blog/local-network-access
+ * @see https://wicg.github.io/local-network-access/
  */
 function targetAddressSpaceForApiBase(
   base: string,
@@ -74,6 +90,25 @@ function targetAddressSpaceForApiBase(
   return undefined;
 }
 
+/** True when the SPA is on a public origin and the API is on loopback/LAN. */
+export function isPublicToLocalApi(): boolean {
+  if (typeof window === "undefined") return false;
+  const space = targetAddressSpaceForApiBase(API_BASE);
+  if (!space) return false;
+  try {
+    const pageHost = window.location.hostname.toLowerCase();
+    const isPageLoopback =
+      pageHost === "localhost" ||
+      pageHost === "127.0.0.1" ||
+      pageHost === "[::1]" ||
+      pageHost === "::1";
+    // loopback → loopback is not gated by LNA; public (or LAN) → loopback/local is.
+    return !isPageLoopback;
+  } catch {
+    return false;
+  }
+}
+
 /** RequestInit + Chrome LNA option (not in all TS lib.dom versions yet). */
 type LocalNetworkRequestInit = RequestInit & {
   targetAddressSpace?: "local" | "private" | "loopback" | "public";
@@ -83,16 +118,113 @@ function buildFetchInit(init: RequestInit = {}): LocalNetworkRequestInit {
   const next: LocalNetworkRequestInit = { ...init };
   const space = targetAddressSpaceForApiBase(API_BASE);
   if (space) {
+    // Always annotate when the API host is local/loopback so mixed-content
+    // exemptions and LNA permission prompts apply (HTTPS → http://localhost).
     next.targetAddressSpace = space;
   }
   return next;
+}
+
+/**
+ * Concurrent fetches while Chrome shows the LNA prompt often show as "blocked"
+ * in DevTools even though the app later works after Allow. Serialize one
+ * lightweight request first so only a single prompt fires and the rest wait.
+ */
+let lnaGate: Promise<void> | null = null;
+let lnaPrimed = false;
+
+async function ensureLocalNetworkAccess(): Promise<void> {
+  if (!isPublicToLocalApi() || lnaPrimed) return;
+  if (lnaGate) return lnaGate;
+
+  lnaGate = (async () => {
+    try {
+      // Prefer Permissions API when available (Chrome split: loopback-network / local-network).
+      const space = targetAddressSpaceForApiBase(API_BASE);
+      if (space && navigator.permissions?.query) {
+        const names =
+          space === "loopback"
+            ? (["loopback-network", "local-network-access"] as const)
+            : (["local-network", "local-network-access"] as const);
+        for (const name of names) {
+          try {
+            const status = await navigator.permissions.query({
+              name: name as PermissionName,
+            });
+            if (status.state === "granted") {
+              lnaPrimed = true;
+              return;
+            }
+            if (status.state === "denied") {
+              throw new LocalNetworkAccessError();
+            }
+            break; // "prompt" — fall through to priming fetch
+          } catch (err) {
+            if (err instanceof LocalNetworkAccessError) throw err;
+            // Unsupported permission name — try next / fall through
+          }
+        }
+      }
+
+      // Public health endpoint: no auth; CORS already covers allowed origins.
+      // This single fetch is what should trigger Chrome's LNA permission prompt.
+      const res = await fetch(
+        `${API_BASE}/actuator/health`,
+        buildFetchInit({
+          method: "GET",
+          headers: { Accept: "application/json" },
+          credentials: "omit",
+          cache: "no-store",
+        }),
+      );
+      // Any HTTP response means LNA + network path is open (even 503).
+      if (res.type !== "opaque") {
+        lnaPrimed = true;
+      }
+    } catch (err) {
+      // Permission explicitly denied — surface immediately.
+      if (err instanceof LocalNetworkAccessError) throw err;
+      // TypeError: LNA deny *or* API offline / CORS. Do not throw here —
+      // leave unprimed so real calls still run and map the error themselves.
+    } finally {
+      lnaGate = null;
+    }
+  })();
+
+  return lnaGate;
+}
+
+function isLikelyLocalNetworkBlock(err: unknown): boolean {
+  if (!(err instanceof TypeError)) return false;
+  const msg = (err.message || "").toLowerCase();
+  return (
+    msg.includes("failed to fetch") ||
+    msg.includes("networkerror") ||
+    msg.includes("load failed") ||
+    msg.includes("local network") ||
+    msg.includes("permission")
+  );
 }
 
 async function apiRequest(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
-  return fetch(`${API_BASE}${path}`, buildFetchInit(init));
+  await ensureLocalNetworkAccess();
+  try {
+    const res = await fetch(`${API_BASE}${path}`, buildFetchInit(init));
+    // A completed response means LNA is open for this origin.
+    if (isPublicToLocalApi()) lnaPrimed = true;
+    return res;
+  } catch (err) {
+    if (err instanceof LocalNetworkAccessError) throw err;
+    if (isPublicToLocalApi() && isLikelyLocalNetworkBlock(err)) {
+      throw new LocalNetworkAccessError(
+        `Could not reach the local API at ${API_BASE}. If Chrome asked for Local Network Access, choose Allow and reload. Also confirm the API is running.`,
+      );
+    }
+    throw err;
+  }
 }
 
 let refreshPromise: Promise<boolean> | null = null;
