@@ -1,14 +1,9 @@
 /**
- * Browser session for access + refresh tokens.
+ * Browser session for access + refresh tokens in localStorage.
  *
- * Access JWT (~15m) and refresh (~7d) are kept in localStorage so closing the tab
- * does not force a re-login. The API also sets an HttpOnly refresh cookie for
- * same-site setups (local Next → local API); that cookie is NOT sent on
- * cross-site fetches (Vercel HTTPS → localhost HTTP), so the body refresh token
- * is required for that hybrid.
- *
- * Trade-off: localStorage is readable by JS (XSS). Prefer cookie-only when the
- * SPA and API are same-site over HTTPS.
+ * Vercel (https) → local API (http) cannot rely on the HttpOnly refresh cookie
+ * for credentialed fetches, so the SPA keeps the opaque refresh token here and
+ * sends it in the refresh request body.
  */
 
 const ACCESS_TOKEN_KEY = "pw_access_token";
@@ -24,6 +19,28 @@ function canUseStorage(): boolean {
   return typeof window !== "undefined";
 }
 
+function readStore(key: string): string | null {
+  if (!canUseStorage()) return null;
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStore(key: string, value: string | null): void {
+  if (!canUseStorage()) return;
+  try {
+    if (value == null || value === "") {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, value);
+    }
+  } catch {
+    // private mode / blocked
+  }
+}
+
 function hydrate(): void {
   if (hydrated || !canUseStorage()) return;
   hydrated = true;
@@ -35,12 +52,16 @@ function hydrate(): void {
       accessToken = token;
       expiresAt = exp;
     } else {
-      localStorage.removeItem(ACCESS_TOKEN_KEY);
-      localStorage.removeItem(ACCESS_EXPIRES_KEY);
+      accessToken = null;
+      expiresAt = 0;
+      if (token) {
+        localStorage.removeItem(ACCESS_TOKEN_KEY);
+        localStorage.removeItem(ACCESS_EXPIRES_KEY);
+      }
     }
     refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
   } catch {
-    // private mode / blocked storage
+    // ignore
   }
 }
 
@@ -71,7 +92,12 @@ export function applyAuthSession(
   refresh: string | null | undefined,
 ): void {
   accessToken = access;
-  expiresAt = Date.now() + expiresInSeconds * 1000;
+  // Guard: never treat missing/zero expiresIn as "already expired"
+  const ttlSec =
+    Number.isFinite(expiresInSeconds) && expiresInSeconds > 0
+      ? expiresInSeconds
+      : 900;
+  expiresAt = Date.now() + ttlSec * 1000;
   if (refresh != null && refresh.length > 0) {
     refreshToken = refresh;
   }
@@ -79,31 +105,39 @@ export function applyAuthSession(
   persist();
 }
 
-/** @deprecated use applyAuthSession — kept for call sites that only set access */
 export function setAccessToken(token: string, expiresInSeconds: number): void {
-  applyAuthSession(token, expiresInSeconds, refreshToken);
+  applyAuthSession(token, expiresInSeconds, getRefreshToken());
 }
 
 export function getAccessToken(): string | null {
   hydrate();
-  if (accessToken && expiresAt > 0 && Date.now() >= expiresAt) {
-    accessToken = null;
-    expiresAt = 0;
-    if (canUseStorage()) {
-      try {
-        localStorage.removeItem(ACCESS_TOKEN_KEY);
-        localStorage.removeItem(ACCESS_EXPIRES_KEY);
-      } catch {
-        // ignore
-      }
-    }
-    return null;
+  // Always prefer storage so another tab's refresh is visible
+  const storeToken = readStore(ACCESS_TOKEN_KEY);
+  const storeExp = Number(readStore(ACCESS_EXPIRES_KEY) || 0);
+  if (storeToken && storeExp > Date.now()) {
+    accessToken = storeToken;
+    expiresAt = storeExp;
+    return accessToken;
   }
-  return accessToken;
+  if (accessToken && expiresAt > Date.now()) {
+    return accessToken;
+  }
+  // expired
+  accessToken = null;
+  expiresAt = 0;
+  writeStore(ACCESS_TOKEN_KEY, null);
+  writeStore(ACCESS_EXPIRES_KEY, null);
+  return null;
 }
 
+/** Always re-read from localStorage so multi-tab rotations are picked up. */
 export function getRefreshToken(): string | null {
   hydrate();
+  const fromStore = readStore(REFRESH_TOKEN_KEY);
+  if (fromStore) {
+    refreshToken = fromStore;
+    return fromStore;
+  }
   return refreshToken;
 }
 
@@ -112,19 +146,13 @@ export function clearAccessToken(): void {
   expiresAt = 0;
   refreshToken = null;
   hydrated = true;
-  if (!canUseStorage()) return;
-  try {
-    localStorage.removeItem(ACCESS_TOKEN_KEY);
-    localStorage.removeItem(ACCESS_EXPIRES_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
-  } catch {
-    // ignore
-  }
+  writeStore(ACCESS_TOKEN_KEY, null);
+  writeStore(ACCESS_EXPIRES_KEY, null);
+  writeStore(REFRESH_TOKEN_KEY, null);
 }
 
-/** No-op kept so older call sites still compile; we no longer wipe our own keys. */
 export function clearLegacyTokenStorage(): void {
-  // intentionally empty — session keys above are the live store
+  // no-op
 }
 
 export function isAuthenticated(): boolean {
@@ -133,5 +161,9 @@ export function isAuthenticated(): boolean {
 
 export function getAccessExpiresAt(): number {
   hydrate();
+  const storeExp = Number(readStore(ACCESS_EXPIRES_KEY) || 0);
+  if (storeExp > 0) {
+    expiresAt = storeExp;
+  }
   return expiresAt;
 }

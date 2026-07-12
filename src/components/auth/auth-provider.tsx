@@ -46,11 +46,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const ok = await authApi.restoreSession();
         if (!cancelled) {
+          // If body refresh failed (API briefly down) but we still have tokens, stay signed in.
           setAuthenticated(ok || isAuthenticated());
         }
       } catch {
         if (!cancelled) {
-          // Keep refresh token on unexpected errors; only clear on explicit logout / hard auth fail
           setAuthenticated(isAuthenticated());
         }
       } finally {
