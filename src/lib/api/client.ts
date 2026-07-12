@@ -39,22 +39,39 @@ type RequestOptions = {
 };
 
 /**
- * Chrome Local Network Access: public pages (Vercel) calling localhost need an
- * explicit address-space tag so the browser can prompt / allow the request.
+ * Chrome Local Network Access: public pages (Vercel) calling the user's machine
+ * must declare the correct IP address space.
+ * - localhost / 127.0.0.1 / ::1 → "loopback" (NOT "local")
+ * - LAN hosts (192.168.x, 10.x, …) → "local"
+ * Wrong tag →: target IP address space of `local` yet resource is in `loopback`
  * @see https://developer.chrome.com/blog/local-network-access
  */
-function isLoopbackApiBase(base: string): boolean {
+function targetAddressSpaceForApiBase(
+  base: string,
+): "loopback" | "local" | undefined {
   try {
     const host = new URL(base).hostname.toLowerCase();
-    return (
+    if (
       host === "localhost" ||
       host === "127.0.0.1" ||
       host === "[::1]" ||
       host === "::1"
-    );
+    ) {
+      return "loopback";
+    }
+    // Private / link-local hostnames or IPs (optional; only if you ever point API there)
+    if (
+      host.endsWith(".local") ||
+      host.startsWith("10.") ||
+      host.startsWith("192.168.") ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    ) {
+      return "local";
+    }
   } catch {
-    return false;
+    // ignore
   }
+  return undefined;
 }
 
 /** RequestInit + Chrome LNA option (not in all TS lib.dom versions yet). */
@@ -64,9 +81,9 @@ type LocalNetworkRequestInit = RequestInit & {
 
 function buildFetchInit(init: RequestInit = {}): LocalNetworkRequestInit {
   const next: LocalNetworkRequestInit = { ...init };
-  if (isLoopbackApiBase(API_BASE)) {
-    // "local" covers loopback for LNA; required for https public → http localhost.
-    next.targetAddressSpace = "local";
+  const space = targetAddressSpaceForApiBase(API_BASE);
+  if (space) {
+    next.targetAddressSpace = space;
   }
   return next;
 }
