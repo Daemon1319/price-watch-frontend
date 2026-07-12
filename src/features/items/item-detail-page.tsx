@@ -23,7 +23,13 @@ import {
   getTrackedItem,
   updateTrackedItem,
 } from "@/lib/api/tracked-items";
-import { formatDateTime, formatPrice, stockLabel } from "@/lib/format";
+import {
+  cn,
+  formatDateTime,
+  formatPrice,
+  formatVariant,
+  stockLabel,
+} from "@/lib/format";
 import type { TrackedItem, TrackedItemStatus } from "@/lib/types";
 import { useRetryCooldown } from "@/lib/hooks/use-retry-cooldown";
 
@@ -41,6 +47,7 @@ function ItemDetailContent() {
   const [status, setStatus] = useState<TrackedItemStatus>("ACTIVE");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<unknown>(null);
+  const [saveOk, setSaveOk] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const saveCooldown = useRetryCooldown(saveError);
   const saveBlocked = saving || saveCooldown > 0;
@@ -70,7 +77,9 @@ function ItemDetailContent() {
   async function onSave(e: FormEvent) {
     e.preventDefault();
     if (saveBlocked) return;
-    setSaveError(null);
+    // Only clear prior error when present — avoids an extra re-render flash.
+    if (saveError != null) setSaveError(null);
+    setSaveOk(false);
     setSaving(true);
     try {
       const priceThreshold =
@@ -87,11 +96,17 @@ function ItemDetailContent() {
         status,
       });
       setItem(updated);
+      setSaveOk(true);
     } catch (err) {
       setSaveError(err);
+      setSaveOk(false);
     } finally {
       setSaving(false);
     }
+  }
+
+  function markFormDirty() {
+    if (saveOk) setSaveOk(false);
   }
 
   async function onDelete() {
@@ -135,7 +150,11 @@ function ItemDetailContent() {
     <>
       <PageHeader
         title={item.productName || "Tracked item"}
-        description={item.url}
+        description={
+          formatVariant(item)
+            ? `${formatVariant(item)} · Uniqlo SKU`
+            : item.url
+        }
         actions={
           <>
             <Link href="/items" className="hidden sm:block">
@@ -173,6 +192,9 @@ function ItemDetailContent() {
                 <Badge tone={item.status === "ACTIVE" ? "success" : "warn"}>
                   {item.status}
                 </Badge>
+                {formatVariant(item) && (
+                  <Badge tone="neutral">{formatVariant(item)}</Badge>
+                )}
               </div>
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
@@ -187,6 +209,24 @@ function ItemDetailContent() {
                   <dt className="text-[var(--muted)]">Stock</dt>
                   <dd className="font-medium">
                     {stockLabel(item.lastKnownStockStatus)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[var(--muted)]">Color</dt>
+                  <dd className="font-medium">
+                    {item.colorName || item.colorCode || "—"}
+                    {item.colorName && item.colorCode
+                      ? ` (${item.colorCode})`
+                      : ""}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[var(--muted)]">Size</dt>
+                  <dd className="font-medium">
+                    {item.sizeName || item.sizeCode || "—"}
+                    {item.sizeName && item.sizeCode
+                      ? ` (${item.sizeCode})`
+                      : ""}
                   </dd>
                 </div>
                 <div>
@@ -219,7 +259,10 @@ function ItemDetailContent() {
                 inputMode="decimal"
                 placeholder="Leave blank to keep current"
                 value={threshold}
-                onChange={(e) => setThreshold(e.target.value)}
+                onChange={(e) => {
+                  setThreshold(e.target.value);
+                  markFormDirty();
+                }}
               />
               <p className="mt-1.5 text-xs text-[var(--muted)]">
                 Minimum drop amount (not a target price). Leave blank to keep the
@@ -231,7 +274,10 @@ function ItemDetailContent() {
               <Select
                 id="status"
                 value={status}
-                onChange={(e) => setStatus(e.target.value as TrackedItemStatus)}
+                onChange={(e) => {
+                  setStatus(e.target.value as TrackedItemStatus);
+                  markFormDirty();
+                }}
               >
                 <option value="ACTIVE">Active</option>
                 <option value="PAUSED">Paused</option>
@@ -240,24 +286,39 @@ function ItemDetailContent() {
             <Checkbox
               label="Notify on restock only"
               checked={restockOnly}
-              onChange={(e) => setRestockOnly(e.target.checked)}
+              onChange={(e) => {
+                setRestockOnly(e.target.checked);
+                markFormDirty();
+              }}
             />
             <ErrorAlert error={saveError} />
             <div className="flex flex-col gap-2 sm:flex-row">
               <Button
                 type="submit"
                 disabled={saveBlocked}
-                className="w-full sm:w-auto"
-              >
-                {saving ? (
-                  <>
-                    <Spinner /> Saving…
-                  </>
-                ) : saveCooldown > 0 ? (
-                  `Try again in ${saveCooldown}s`
-                ) : (
-                  "Save changes"
+                aria-busy={saving}
+                className={cn(
+                  // Stable width so Saving… / Saved doesn’t resize the control.
+                  "w-full min-w-[10.5rem] sm:w-auto",
+                  // Busy: block double-submit without opacity/scale flash on disable.
+                  saving &&
+                    "disabled:opacity-100 disabled:cursor-wait active:scale-100",
                 )}
+              >
+                <span className="inline-flex min-h-5 min-w-[7.5rem] items-center justify-center gap-2">
+                  {saving ? (
+                    <>
+                      <Spinner />
+                      Saving…
+                    </>
+                  ) : saveCooldown > 0 ? (
+                    `Try again in ${saveCooldown}s`
+                  ) : saveOk ? (
+                    "Saved"
+                  ) : (
+                    "Save changes"
+                  )}
+                </span>
               </Button>
               <Button
                 type="button"

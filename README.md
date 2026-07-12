@@ -1,61 +1,37 @@
-# PriceWatch Frontend
+# PriceWatch
 
-Next.js App Router client for the PriceWatch API.
+A product price-tracking client built with **Next.js 16**, **React 19**, and **TypeScript**. Talks to the PriceWatch Spring API for auth, tracked items, product details, and price history.
 
-## Stack
+## Modules
 
-- Next.js 16 + React 19 + TypeScript
-- Tailwind CSS v4
-- Recharts (product price history)
+| Module | Route / API | What It Does |
+|--------|-------------|--------------|
+| Auth | `/login`, `/register` | Register, login, logout, JWT + refresh cookie session |
+| Dashboard | `/` | Snapshot of tracked items and recent price drops |
+| Tracked Items | `/items`, `/items/[id]` | Add Uniqlo URLs, pick **color + size**, set thresholds, filter by status |
+| Products | `/products/[id]` | Product/SKU detail, stock, and price history |
 
-## Setup
+### Uniqlo variants
 
-```bash
-npm install
-cp .env.example .env.local   # optional
-npm run dev
+Tracking is **per color + size**, not the whole product page.
+
+1. Paste a Uniqlo product URL on `/items`
+2. Click **Load colors & sizes** (`GET /api/v1/products/variants`)
+3. Choose color (e.g. Black `COL09`) and size (e.g. M `SMA004`)
+4. Start tracking — POST includes `colorCode` + `sizeCode`
+
+List and detail screens show the selected variant (e.g. `Black / M`).
+
+## Tech Stack
+
+Next.js 16 · React 19 · TypeScript 5 · Tailwind CSS 4 · Recharts
+
+## Project Structure
+
 ```
-
-Open [http://localhost:3000](http://localhost:3000).  
-API default: `http://localhost:8080` (`NEXT_PUBLIC_API_BASE_URL`).
-
-## Auth
-
-- **Access JWT** — in memory, sent as `Authorization: Bearer`
-- **Refresh** — HttpOnly cookie (`pw_refresh`), sent with `credentials: "include"`
-- On load, the app silently calls `/api/v1/auth/refresh` to restore the session
-
-## Source layout
-
+src/features/
+├── auth/                # Login & registration screens
+├── dashboard/           # Home summary of tracking activity
+├── items/               # Tracked item list & detail
+└── products/            # Product detail & price history
 ```
-src/
-  app/                 # routes only (thin re-exports)
-  components/
-    auth/              # AuthProvider, RequireAuth
-    layout/            # AppShell
-    ui/                # shared UI primitives
-  features/            # screens by domain
-    auth/
-    dashboard/
-    items/
-    products/
-  lib/
-    api/               # HTTP client + domain API helpers
-    auth/              # in-memory session
-    hooks/
-    format.ts
-    types.ts
-```
-
-## Scripts
-
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Dev server (Turbopack) |
-| `npm run build` | Production build |
-| `npm run start` | Serve production build |
-| `npm run lint` | ESLint |
-
-## Backend
-
-Start the Spring API on `:8080` (compose + `local` profile). CORS allows `http://localhost:3000` with credentials.

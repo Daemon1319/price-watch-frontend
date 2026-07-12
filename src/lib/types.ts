@@ -36,6 +36,12 @@ export interface TrackedItem {
   lastKnownPrice: number | null;
   lastKnownStockStatus: StockStatus | null;
   thumbnailUrl: string | null;
+  /** Uniqlo color code, e.g. COL09 */
+  colorCode: string | null;
+  colorName: string | null;
+  /** Uniqlo size code, e.g. SMA004 or INS029 */
+  sizeCode: string | null;
+  sizeName: string | null;
   priceThreshold: number | null;
   notifyOnRestockOnly: boolean;
   status: TrackedItemStatus;
@@ -44,6 +50,10 @@ export interface TrackedItem {
 
 export interface CreateTrackedItemRequest {
   url: string;
+  /** Required for Uniqlo — e.g. COL09 or bare 09 */
+  colorCode?: string | null;
+  /** Required for Uniqlo — e.g. SMA004 (M) or INS029 (29") */
+  sizeCode?: string | null;
   priceThreshold?: number | null;
   notifyOnRestockOnly: boolean;
 }
@@ -62,8 +72,44 @@ export interface Product {
   lastKnownPrice: number | null;
   lastKnownStockStatus: StockStatus | null;
   thumbnailUrl: string | null;
+  colorCode: string | null;
+  colorName: string | null;
+  sizeCode: string | null;
+  sizeName: string | null;
   lastCheckedAt: string | null;
   healthy: boolean;
+}
+
+/** GET /api/v1/products/variants?url=… — pick a SKU before tracking. */
+export interface ProductVariantsResponse {
+  productName: string | null;
+  productId: string | null;
+  baseUrl: string;
+  colors: ColorOption[];
+  sizes: SizeOption[];
+  variants: ProductVariantOption[];
+}
+
+export interface ColorOption {
+  code: string;
+  name: string | null;
+  displayCode: string | null;
+}
+
+export interface SizeOption {
+  code: string;
+  name: string | null;
+  displayCode: string | null;
+}
+
+export interface ProductVariantOption {
+  colorCode: string;
+  colorName: string | null;
+  sizeCode: string;
+  sizeName: string | null;
+  price: number | null;
+  stockStatus: StockStatus | null;
+  thumbnailUrl: string | null;
 }
 
 export interface PriceHistoryPoint {
