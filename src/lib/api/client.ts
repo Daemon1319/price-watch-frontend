@@ -38,6 +38,46 @@ type RequestOptions = {
   skipRefresh?: boolean;
 };
 
+/**
+ * Chrome Local Network Access: public pages (Vercel) calling localhost need an
+ * explicit address-space tag so the browser can prompt / allow the request.
+ * @see https://developer.chrome.com/blog/local-network-access
+ */
+function isLoopbackApiBase(base: string): boolean {
+  try {
+    const host = new URL(base).hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "[::1]" ||
+      host === "::1"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** RequestInit + Chrome LNA option (not in all TS lib.dom versions yet). */
+type LocalNetworkRequestInit = RequestInit & {
+  targetAddressSpace?: "local" | "private" | "loopback" | "public";
+};
+
+function buildFetchInit(init: RequestInit = {}): LocalNetworkRequestInit {
+  const next: LocalNetworkRequestInit = { ...init };
+  if (isLoopbackApiBase(API_BASE)) {
+    // "local" covers loopback for LNA; required for https public → http localhost.
+    next.targetAddressSpace = "local";
+  }
+  return next;
+}
+
+async function apiRequest(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  return fetch(`${API_BASE}${path}`, buildFetchInit(init));
+}
+
 let refreshPromise: Promise<boolean> | null = null;
 
 /**
@@ -55,7 +95,7 @@ export async function tryRefresh(): Promise<boolean> {
     }
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+      const res = await apiRequest("/api/v1/auth/refresh", {
         method: "POST",
         headers: {
           Accept: "application/json",
@@ -72,7 +112,7 @@ export async function tryRefresh(): Promise<boolean> {
           const latest = getRefreshToken();
           if (latest && latest !== storedRefresh) {
             // Another tab rotated; retry once with the newer token.
-            const retry = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+            const retry = await apiRequest("/api/v1/auth/refresh", {
               method: "POST",
               headers: {
                 Accept: "application/json",
@@ -108,7 +148,7 @@ export async function tryRefresh(): Promise<boolean> {
       );
       return true;
     } catch {
-      // Network blip (backend sleeping / offline): keep stored tokens for retry
+      // Network blip / LNA blocked / backend offline: keep stored tokens for retry
       return false;
     } finally {
       refreshPromise = null;
@@ -148,6 +188,7 @@ async function parseError(res: Response): Promise<ApiError> {
  * - Access JWT: Authorization Bearer (localStorage)
  * - Refresh: body token (cross-site) + cookie when available
  * - On 401: one refresh attempt, then retry once
+ * - Chrome LNA: targetAddressSpace when API is localhost
  */
 export async function apiFetch<T>(
   path: string,
@@ -174,7 +215,7 @@ export async function apiFetch<T>(
     }
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await apiRequest(path, {
     method,
     headers,
     credentials: "include",
